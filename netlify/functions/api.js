@@ -1,67 +1,65 @@
-import { GoogleSpreadsheet } from 'google-spreadsheet';
-import { JWT } from 'google-auth-library';
+// API REST del panel de administración (CRUD del inventario de autos en Google Sheets)
+import { abrirHoja, hojaAutos, filaAAuto, asegurarColumnas } from '../lib/sheets.mjs';
 
-export const handler = async (event, context) => {
+const respuesta = (statusCode, data) => ({
+  statusCode,
+  headers: { 'Content-Type': 'application/json; charset=utf-8' },
+  body: JSON.stringify(data),
+});
+
+// Convierte el objeto del frontend (minúsculas) a las columnas de la hoja
+function aFila(a) {
+  return {
+    Marca: a.marca ?? '',
+    Modelo: a.modelo ?? '',
+    Anio: a.anio ?? '',
+    Precio: a.precio ?? '',
+    Categoria: a.categoria ?? '',
+    Transmision: a.transmision ?? '',
+    Combustible: a.combustible ?? '',
+    Kilometraje: a.kilometraje ?? 0,
+    Stock: a.stock ?? 0,
+    Imagen: a.imagen ?? '',
+  };
+}
+
+export const handler = async (event) => {
   try {
-    const serviceAccountAuth = new JWT({
-      email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-      key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n').replace(/"/g, ''),
-      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-    });
+    const doc = await abrirHoja();
+    const hoja = hojaAutos(doc);
+    await asegurarColumnas(hoja); // crea encabezados o agrega la columna Imagen si falta
 
-    const doc = new GoogleSpreadsheet(process.env.GOOGLE_SHEET_ID, serviceAccountAuth);
-    await doc.loadInfo();
-    const sheet = doc.sheetsByIndex[0]; 
-    
-    const method = event.httpMethod;
+    const metodo = event.httpMethod;
 
-    if (method === 'GET') {
-      const rows = await sheet.getRows();
-      const data = rows.map(row => ({
-        ID: row.get('ID'), 
-        Nombre: row.get('Nombre'), 
-        Precio: row.get('Precio'), 
-        Categoria: row.get('Categoria'), 
-        Stock: row.get('Stock')
-      }));
-      return { statusCode: 200, body: JSON.stringify(data) };
+    if (metodo === 'GET') {
+      const filas = await hoja.getRows();
+      return respuesta(200, filas.map(filaAAuto));
     }
 
-    if (method === 'POST') {
-      const data = JSON.parse(event.body);
-      data.ID = Date.now().toString(); 
-      await sheet.addRow(data);
-      return { statusCode: 201, body: JSON.stringify({ message: "Creado" }) };
+    const datos = JSON.parse(event.body || '{}');
+
+    if (metodo === 'POST') {
+      await hoja.addRow({ ID: Date.now().toString(), ...aFila(datos) });
+      return respuesta(201, { mensaje: 'Auto registrado' });
     }
 
-    if (method === 'PUT') {
-      const data = JSON.parse(event.body);
-      const rows = await sheet.getRows();
-      const rowToUpdate = rows.find(r => r.get('ID') === data.ID);
-      if(rowToUpdate) {
-        rowToUpdate.assign({
-          Nombre: data.Nombre,
-          Precio: data.Precio,
-          Categoria: data.Categoria,
-          Stock: data.Stock
-        });
-        await rowToUpdate.save();
-        return { statusCode: 200, body: JSON.stringify({ message: "Actualizado" }) };
-      }
+    const filas = await hoja.getRows();
+    const fila = filas.find((r) => r.get('ID') === String(datos.id));
+    if (!fila) return respuesta(404, { error: 'No se encontró el auto con ese ID.' });
+
+    if (metodo === 'PUT') {
+      fila.assign(aFila(datos));
+      await fila.save();
+      return respuesta(200, { mensaje: 'Auto actualizado' });
     }
 
-    if (method === 'DELETE') {
-      const { ID } = JSON.parse(event.body);
-      const rows = await sheet.getRows();
-      const rowToDelete = rows.find(r => r.get('ID') === ID);
-      if(rowToDelete) {
-        await rowToDelete.delete();
-        return { statusCode: 200, body: JSON.stringify({ message: "Eliminado" }) };
-      }
+    if (metodo === 'DELETE') {
+      await fila.delete();
+      return respuesta(200, { mensaje: 'Auto eliminado' });
     }
 
-    return { statusCode: 400, body: "Método no soportado" };
+    return respuesta(405, { error: 'Método no soportado' });
   } catch (error) {
-    return { statusCode: 500, body: JSON.stringify({ error: error.message }) };
+    return respuesta(500, { error: error.message });
   }
 };

@@ -1,7 +1,7 @@
 // API REST: POST /.netlify/functions/asistente
-// 1) Recibe la pregunta  2) Lee productos de Google Sheets  3) Arma el prompt
+// 1) Recibe la pregunta  2) Lee el inventario de autos de Google Sheets  3) Arma el prompt
 // 4) Consulta la IA (Google Gemini)  5) Guarda historial  6) Devuelve JSON
-import { abrirHoja, leerProductos, hojaHistorial, json } from '../lib/sheets.mjs';
+import { abrirHoja, leerAutos, hojaHistorial, json } from '../lib/sheets.mjs';
 
 const MODELOS = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.5-flash'].filter(Boolean);
 
@@ -31,37 +31,42 @@ async function consultarIA(prompt) {
   throw new Error(ultimoError);
 }
 
+const pesos = (n) => '$' + Number(n).toLocaleString('es-MX') + ' MXN';
+
 function construirPrompt({ pregunta, productos, presupuesto, categoria, necesidad }) {
   const catalogo = productos
     .map(
-      (p) =>
-        `- ID ${p.id} | ${p.nombre} | Categoría: ${p.categoria} | Precio: $${p.precio} MXN | Stock: ${p.stock}` +
-        (p.ram ? ` | RAM: ${p.ram}` : '') +
-        (p.almacenamiento ? ` | Almacenamiento: ${p.almacenamiento}` : '')
+      (a) =>
+        `- ID ${a.id} | ${a.marca} ${a.modelo} ${a.anio} | Tipo: ${a.categoria} | Precio: ${pesos(a.precio)} | ` +
+        `Transmisión: ${a.transmision} | Combustible: ${a.combustible} | ` +
+        `${a.kilometraje > 0 ? 'Seminuevo, ' + a.kilometraje.toLocaleString('es-MX') + ' km' : 'Nuevo (0 km)'} | ` +
+        `Unidades disponibles: ${a.stock}`
     )
     .join('\n');
 
   const filtros = [
-    presupuesto ? `Presupuesto máximo: $${presupuesto} MXN` : null,
-    categoria ? `Categoría deseada: ${categoria}` : null,
-    necesidad ? `Necesidad / uso: ${necesidad}` : null,
+    presupuesto ? `Presupuesto máximo: ${pesos(presupuesto)}` : null,
+    categoria ? `Tipo de vehículo: ${categoria}` : null,
+    necesidad ? `Uso que le dará: ${necesidad}` : null,
   ].filter(Boolean);
 
-  return `Eres "Asistente Cloud", un asistente especializado en productos tecnológicos de una tienda.
+  return `Eres el asesor de ventas virtual de una agencia de autos. Atiendes a clientes que buscan auto.
 
 REGLAS:
-1. Utiliza SOLAMENTE la información del CATÁLOGO. No inventes productos, precios ni características.
-2. Si ningún producto cumple con la solicitud, indícalo claramente y sugiere la alternativa más cercana del catálogo.
-3. Si hay presupuesto, nunca recomiendes productos que lo excedan (puedes mencionarlos solo como referencia, aclarando que lo exceden).
-4. Si un producto tiene Stock 0, indica que está agotado.
-5. Explica brevemente la razón de tu recomendación (máximo 5 líneas o una lista corta).
-6. Si la pregunta no tiene relación con el catálogo, responde amablemente que solo puedes ayudar con los productos de la tienda.
-7. Responde en español.
+1. Utiliza SOLAMENTE los autos del INVENTARIO. No inventes modelos, precios, versiones ni características.
+2. Si ningún auto cumple con la solicitud, dilo claramente y sugiere la opción más cercana del inventario.
+3. Si hay presupuesto, no recomiendes autos que lo excedan (puedes mencionarlos solo como referencia, aclarando cuánto lo exceden).
+4. Si un auto tiene 0 unidades disponibles, indica que está agotado.
+5. Recomienda máximo 3 autos. Para cada uno: marca, modelo, año y precio, y una razón breve ligada a lo que pidió el cliente.
+6. Usa un tono cordial y profesional, como un buen vendedor, sin exagerar. Sé breve.
+7. Si la pregunta no tiene relación con autos o con el inventario, responde amablemente que solo puedes ayudar con los vehículos de la agencia.
+8. No uses formato Markdown (sin asteriscos ni almohadillas); usa guiones para listas.
+9. Responde en español.
 
-CATÁLOGO (obtenido de Google Sheets):
-${catalogo || '(el catálogo está vacío)'}
+INVENTARIO (obtenido de Google Sheets):
+${catalogo || '(el inventario está vacío)'}
 
-${filtros.length ? 'FILTROS DEL USUARIO:\n' + filtros.join('\n') + '\n\n' : ''}PREGUNTA DEL USUARIO:
+${filtros.length ? 'PREFERENCIAS DEL CLIENTE:\n' + filtros.join('\n') + '\n\n' : ''}PREGUNTA DEL CLIENTE:
 ${pregunta}`;
 }
 
@@ -83,7 +88,7 @@ export default async (req) => {
   let doc, productos;
   try {
     doc = await abrirHoja();
-    productos = await leerProductos(doc);
+    productos = await leerAutos(doc);
   } catch (e) {
     return json(502, { error: 'No fue posible consultar Google Sheets.', detalle: e.message });
   }
@@ -93,7 +98,7 @@ export default async (req) => {
     ? productos.filter((p) => (p.categoria || '').toLowerCase() === String(categoria).toLowerCase())
     : productos;
 
-  const preguntaFinal = pregunta || `Recomiéndame un producto para: ${necesidad}`;
+  const preguntaFinal = pregunta || `Recomiéndame un auto para: ${necesidad}`;
   const prompt = construirPrompt({ pregunta: preguntaFinal, productos: enContexto, presupuesto, categoria, necesidad });
 
   // Pasos 4-5: IA
@@ -103,7 +108,7 @@ export default async (req) => {
   } catch (e) {
     return json(502, { error: 'El asistente no pudo procesar la solicitud.', detalle: e.message });
   }
-  if (!resultado.texto) return json(200, { respuesta: 'El asistente no encontró resultados para tu consulta.', productosConsultados: enContexto.length });
+  if (!resultado.texto) return json(200, { respuesta: 'El asesor no encontró autos para tu consulta.', productosConsultados: enContexto.length });
 
   // Historial (si falla no rompe la respuesta)
   let historialGuardado = false;

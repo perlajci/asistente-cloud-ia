@@ -1,0 +1,4 @@
+Pon aquí las fotos de los autos (por ejemplo versa.jpg, rav4.webp).
+En Google Sheets, en la columna Imagen, escribe la ruta así: /autos/versa.jpg
+Después haz commit y push para que Netlify las publique.
+Recomendado: imágenes horizontales de unos 1200 x 750 px y menos de 300 KB.

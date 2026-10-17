@@ -2,6 +2,9 @@
 import { GoogleSpreadsheet } from 'google-spreadsheet';
 import { JWT } from 'google-auth-library';
 
+// Columnas de la hoja "Autos" (primera pestaña del documento)
+export const COLUMNAS = ['ID', 'Marca', 'Modelo', 'Anio', 'Precio', 'Categoria', 'Transmision', 'Combustible', 'Kilometraje', 'Stock', 'Imagen'];
+
 export async function abrirHoja() {
   const auth = new JWT({
     email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
@@ -13,21 +16,43 @@ export async function abrirHoja() {
   return doc;
 }
 
-// Lee la hoja de productos (primera pestaña). RAM y Almacenamiento son opcionales.
-export async function leerProductos(doc) {
-  const hoja = doc.sheetsByIndex[0];
-  const filas = await hoja.getRows();
-  const columnas = hoja.headerValues || [];
-  const tiene = (c) => columnas.includes(c);
-  return filas.map((r) => ({
-    id: r.get('ID'),
-    nombre: r.get('Nombre'),
-    categoria: r.get('Categoria'),
-    precio: Number(r.get('Precio')) || 0,
+export const hojaAutos = (doc) => doc.sheetsByIndex[0];
+
+export function filaAAuto(r) {
+  return {
+    id: r.get('ID') || '',
+    marca: r.get('Marca') || '',
+    modelo: r.get('Modelo') || '',
+    anio: Number(r.get('Anio')) || '',
+    precio: Number(String(r.get('Precio') || '').replace(/[^0-9.]/g, '')) || 0,
+    categoria: r.get('Categoria') || '',
+    transmision: r.get('Transmision') || '',
+    combustible: r.get('Combustible') || '',
+    kilometraje: Number(String(r.get('Kilometraje') || '').replace(/[^0-9.]/g, '')) || 0,
     stock: Number(r.get('Stock')) || 0,
-    ram: tiene('RAM') ? r.get('RAM') || '' : '',
-    almacenamiento: tiene('Almacenamiento') ? r.get('Almacenamiento') || '' : '',
-  }));
+    imagen: (r.get('Imagen') || '').trim(),
+  };
+}
+
+// Agrega a la hoja las columnas que falten (por ejemplo, Imagen) sin borrar datos
+export async function asegurarColumnas(hoja) {
+  try {
+    await hoja.loadHeaderRow();
+  } catch {
+    await hoja.setHeaderRow(COLUMNAS);
+    return;
+  }
+  const faltan = COLUMNAS.filter((c) => !hoja.headerValues.includes(c));
+  if (faltan.length) {
+    const nuevas = [...hoja.headerValues, ...faltan];
+    if (hoja.columnCount < nuevas.length) await hoja.resize({ rowCount: hoja.rowCount, columnCount: nuevas.length });
+    await hoja.setHeaderRow(nuevas);
+  }
+}
+
+export async function leerAutos(doc) {
+  const filas = await hojaAutos(doc).getRows();
+  return filas.map(filaAAuto).filter((a) => a.marca || a.modelo);
 }
 
 // Obtiene (o crea si no existe) la pestaña Historial

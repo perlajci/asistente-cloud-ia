@@ -1,0 +1,13 @@
+ID,Marca,Modelo,Anio,Precio,Categoria,Transmision,Combustible,Kilometraje,Stock,Imagen
+1,Nissan,Versa Advance,2025,349900,Sedán,CVT,Gasolina,0,4,
+2,Chevrolet,Aveo LT,2024,279900,Sedán,Manual,Gasolina,0,6,
+3,Volkswagen,Virtus Highline,2025,429900,Sedán,Automática,Gasolina,0,2,
+4,Kia,Rio Hatchback,2023,259000,Hatchback,Automática,Gasolina,28000,1,
+5,Mazda,Mazda 2 i Grand Touring,2024,339900,Hatchback,Automática,Gasolina,15000,2,
+6,Toyota,RAV4 Hybrid XLE,2025,689900,SUV,CVT,Híbrido,0,3,
+7,Honda,HR-V Uniq,2024,519900,SUV,CVT,Gasolina,0,2,
+8,Kia,Sorento EX,2023,629000,SUV,Automática,Gasolina,34000,1,
+9,Toyota,Hilux Doble Cabina,2025,559900,Pickup,Manual,Diésel,0,3,
+10,Ford,Maverick XLT Híbrida,2024,629900,Pickup,CVT,Híbrido,12000,1,
+11,Ford,Mustang GT,2023,999000,Deportivo,Automática,Gasolina,9000,1,
+12,Honda,Odyssey Touring,2024,1049900,Minivan,Automática,Gasolina,0,0,
