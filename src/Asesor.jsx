@@ -65,10 +65,14 @@ export default function Asesor({ datos, errorDatos, alConsultar }) {
       try {
         data = await res.json();
       } catch {
-        throw new Error('No fue posible consultar el servicio Cloud.');
+        throw new Error(
+          res.status === 502 || res.status === 504
+            ? `El asesor tardó demasiado en responder (código ${res.status}). Intenta de nuevo en unos segundos.`
+            : `No fue posible consultar el servicio Cloud (código ${res.status}).`
+        );
       }
 
-      if (!res.ok) throw new Error(data.error || 'El asesor no pudo procesar la solicitud.');
+      if (!res.ok) throw new Error((data.error || 'El asesor no pudo procesar la solicitud.') + (data.detalle ? ` Detalle: ${data.detalle}` : ''));
       if (!data.respuesta) throw new Error('El asesor no encontró autos para tu consulta.');
 
       const nueva = { pregunta: texto || necesidad, texto: data.respuesta, consultados: data.productosConsultados };

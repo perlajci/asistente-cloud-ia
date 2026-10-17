@@ -3,32 +3,47 @@
 // 4) Consulta la IA (Google Gemini)  5) Guarda historial  6) Devuelve JSON
 import { abrirHoja, leerAutos, hojaHistorial, json } from '../lib/sheets.mjs';
 
-const MODELOS = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.5-flash'].filter(Boolean);
+// Modelos rápidos primero: Netlify corta las funciones a los 10 segundos en el plan gratuito
+const MODELOS = [process.env.GEMINI_MODEL, 'gemini-flash-lite-latest', 'gemini-flash-latest', 'gemini-2.5-flash-lite'].filter(Boolean);
+const LIMITE_MS = 9000; // margen de seguridad antes del límite de Netlify
 
-async function consultarIA(prompt) {
+async function consultarIA(prompt, inicio) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('Falta configurar GEMINI_API_KEY en Netlify.');
 
   let ultimoError = '';
   for (const modelo of MODELOS) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.3, maxOutputTokens: 800 },
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) {
-      const texto = data?.candidates?.[0]?.content?.parts?.map((p) => p.text).join('') || '';
-      return { texto: texto.trim(), modelo };
+    const restante = LIMITE_MS - (Date.now() - inicio) - 800;
+    if (restante < 1500) break;
+
+    const control = new AbortController();
+    const reloj = setTimeout(() => control.abort(), restante);
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.3, maxOutputTokens: 1024 },
+        }),
+        signal: control.signal,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        const texto = data?.candidates?.[0]?.content?.parts?.filter((p) => !p.thought).map((p) => p.text || '').join('') || '';
+        return { texto: texto.trim(), modelo };
+      }
+      ultimoError = data?.error?.message || `HTTP ${res.status}`;
+      if (res.status !== 404 && res.status !== 400) break; // solo probamos otro modelo si este no existe o no es compatible
+    } catch (e) {
+      ultimoError = e.name === 'AbortError' ? 'El servicio de IA tardó demasiado en responder.' : e.message;
+      break;
+    } finally {
+      clearTimeout(reloj);
     }
-    ultimoError = data?.error?.message || `HTTP ${res.status}`;
-    if (res.status !== 404) break; // solo probamos otro modelo si este no existe
   }
-  throw new Error(ultimoError);
+  throw new Error(ultimoError || 'El servicio de IA no respondió a tiempo.');
 }
 
 const pesos = (n) => '$' + Number(n).toLocaleString('es-MX') + ' MXN';
@@ -71,6 +86,7 @@ ${pregunta}`;
 }
 
 export default async (req) => {
+  const inicio = Date.now();
   if (req.method !== 'POST') return json(405, { error: 'Usa el método POST.' });
 
   let body;
@@ -104,7 +120,7 @@ export default async (req) => {
   // Pasos 4-5: IA
   let resultado;
   try {
-    resultado = await consultarIA(prompt);
+    resultado = await consultarIA(prompt, inicio);
   } catch (e) {
     return json(502, { error: 'El asistente no pudo procesar la solicitud.', detalle: e.message });
   }
@@ -112,13 +128,20 @@ export default async (req) => {
 
   // Historial (si falla no rompe la respuesta)
   let historialGuardado = false;
-  try {
-    const hoja = await hojaHistorial(doc);
-    const fecha = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
-    await hoja.addRow({ Fecha: fecha, Pregunta: preguntaFinal, Respuesta: resultado.texto.slice(0, 1000) });
-    historialGuardado = true;
-  } catch {
-    historialGuardado = false;
+  const restante = LIMITE_MS - (Date.now() - inicio);
+  if (restante > 600) {
+    try {
+      const guardar = (async () => {
+        const hoja = await hojaHistorial(doc);
+        const fecha = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
+        await hoja.addRow({ Fecha: fecha, Pregunta: preguntaFinal, Respuesta: resultado.texto.slice(0, 1000) });
+        return true;
+      })();
+      const tiempo = new Promise((r) => setTimeout(() => r(false), restante - 300));
+      historialGuardado = await Promise.race([guardar, tiempo]);
+    } catch {
+      historialGuardado = false;
+    }
   }
 
   return json(200, {
@@ -126,5 +149,6 @@ export default async (req) => {
     modelo: resultado.modelo,
     productosConsultados: enContexto.length,
     historialGuardado,
+    tiempoMs: Date.now() - inicio,
   });
 };
