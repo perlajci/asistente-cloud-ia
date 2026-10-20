@@ -3,14 +3,14 @@
 // 4) Consulta la IA (Google Gemini)  5) Guarda historial  6) Devuelve JSON
 import { abrirHoja, leerAutos, hojaHistorial, json } from '../lib/sheets.mjs';
 
-// Modelos rápidos candidatos (sin 1.5-flash-8b que ya fue retirado por Google)
+// Modelos actuales recomendados por la API de Google Gemini en v1beta
 const MODELOS = [
-  process.env.GEMINI_MODEL && process.env.GEMINI_MODEL !== 'gemini-1.5-flash-8b' ? process.env.GEMINI_MODEL : null,
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
-  'gemini-1.5-flash',
+  process.env.GEMINI_MODEL,
+  'gemini-3.8-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3.5-flash',
+  'gemini-3.7-flash',
   'gemini-flash-latest',
-  'gemini-2.5-flash-lite',
 ].filter(Boolean);
 const LIMITE_MS = 9000; // margen de seguridad antes del límite de 10 s de Netlify
 
