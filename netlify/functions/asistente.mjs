@@ -3,61 +3,75 @@
 // 4) Consulta la IA (Google Gemini)  5) Guarda historial  6) Devuelve JSON
 import { abrirHoja, leerAutos, hojaHistorial, json } from '../lib/sheets.mjs';
 
-// Modelos rápidos primero: Netlify corta las funciones a los 10 segundos en el plan gratuito
-const MODELOS = ['gemini-1.5-flash-8b', 'gemini-1.5-flash', 'gemini-flash-lite-latest'];
-const LIMITE_MS = 9300; // margen de seguridad antes del límite de 10 s de Netlify
+// Modelos rápidos: Netlify corta las funciones a los 10 segundos en el plan gratuito
+const MODELOS = [
+  process.env.GEMINI_MODEL,
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-8b',
+].filter(Boolean);
+const LIMITE_MS = 9000; // margen de seguridad antes del límite de 10 s de Netlify
 
-// Caché en memoria: si la función sigue "caliente", no vuelve a leer Google Sheets en 60 s
+// Caché en memoria: si la función sigue "caliente", no vuelve a leer Google Sheets en 5 minutos
 let cache = { doc: null, autos: null, hora: 0 };
 
-// Respuesta directa, sin fase de "razonamiento" larga, para que conteste rápido
-function cuerpo(prompt, conPensamientoMinimo) {
-  const generationConfig = { temperature: 0.3, maxOutputTokens: 700 };
-  if (conPensamientoMinimo) generationConfig.thinkingConfig = { thinkingBudget: 0 };
-  return { contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig };
+// Respuesta directa y concisa para responder en menos de 2 segundos
+function cuerpo(prompt) {
+  return {
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.2,
+      maxOutputTokens: 300,
+    },
+  };
 }
 
-async function consultarIA(prompt, inicio, soloModelo = null, conPensamientoMinimo = true) {
+async function consultarIA(prompt, inicio) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('Falta configurar GEMINI_API_KEY en Netlify.');
 
   let ultimoError = '';
-  for (const modelo of soloModelo ? [soloModelo] : MODELOS) {
-    const restante = LIMITE_MS - (Date.now() - inicio) - 800;
+
+  for (const modelo of MODELOS) {
+    const tiempoTranscurrido = Date.now() - inicio;
+    const restante = LIMITE_MS - tiempoTranscurrido;
+    // Si queda menos de 1.5 s para el límite de Netlify, detenemos para responder con error controlado
     if (restante < 1500) break;
 
+    // Máximo 3.5 segundos por intento de modelo para dar oportunidad a los fallbacks
+    const tiempoParaEsteModelo = Math.min(restante - 500, 3500);
     const control = new AbortController();
-    const reloj = setTimeout(() => control.abort(), restante);
+    const reloj = setTimeout(() => control.abort(), tiempoParaEsteModelo);
+
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent`;
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-        body: JSON.stringify(cuerpo(prompt, conPensamientoMinimo)),
+        body: JSON.stringify(cuerpo(prompt)),
         signal: control.signal,
       });
+
       const data = await res.json().catch(() => ({}));
-      if (res.status === 400 && conPensamientoMinimo) {
-        // el modelo no acepta la opción de pensamiento: se reintenta el mismo modelo sin ella
-        conPensamientoMinimo = false;
-        clearTimeout(reloj);
-        return consultarIA(prompt, inicio, modelo, false);
-      }
+
       if (res.ok) {
         const texto = data?.candidates?.[0]?.content?.parts?.filter((p) => !p.thought).map((p) => p.text || '').join('') || '';
-        return { texto: texto.trim(), modelo };
+        if (texto.trim()) {
+          return { texto: texto.trim(), modelo };
+        }
       }
+
       ultimoError = data?.error?.message || `HTTP ${res.status}`;
-      // Si el modelo no existe (404), no es compatible (400), está saturado (503/500) o sin cuota (429),
-      // se prueba con el siguiente modelo de la lista
-      if (![400, 404, 429, 500, 503].includes(res.status)) break;
+      // Si el modelo está saturado (503/high demand), sin cuota (429) o falló, continúa con el siguiente modelo
+      console.warn(`[asistente] Modelo ${modelo} no disponible (${ultimoError}). Probando alternativa...`);
     } catch (e) {
-      ultimoError = e.name === 'AbortError' ? 'El servicio de IA tardó demasiado en responder.' : e.message;
-      break;
+      ultimoError = e.name === 'AbortError' ? `Tiempo de espera agotado en ${modelo}.` : e.message;
+      console.warn(`[asistente] Error en ${modelo}:`, ultimoError);
     } finally {
       clearTimeout(reloj);
     }
   }
+
   throw new Error(ultimoError || 'El servicio de IA no respondió a tiempo.');
 }
 
@@ -115,10 +129,10 @@ export default async (req) => {
   const { presupuesto, categoria, necesidad } = body;
   if (!pregunta && !necesidad) return json(400, { error: 'Escribe una pregunta antes de continuar.' });
 
-  // Paso 2: Google Sheets
+  // Paso 2: Google Sheets (caché de 5 minutos para responder al instante)
   let doc, productos;
   try {
-    if (cache.autos && Date.now() - cache.hora < 60000) {
+    if (cache.autos && Date.now() - cache.hora < 300000) {
       ({ doc, autos: productos } = cache);
     } else {
       doc = await abrirHoja();
@@ -129,12 +143,12 @@ export default async (req) => {
     return json(502, { error: 'No fue posible consultar Google Sheets.', detalle: e.message });
   }
 
-  // Filtro previo opcional por categoría y límite de 15 autos para que la IA responda rápido
+  // Filtro previo opcional por categoría y límite de 10 autos para máxima velocidad
   let enContexto = categoria
     ? productos.filter((p) => (p.categoria || '').toLowerCase() === String(categoria).toLowerCase())
     : productos;
 
-  enContexto = enContexto.slice(0, 15);
+  enContexto = enContexto.slice(0, 10);
 
   const preguntaFinal = pregunta || `Recomiéndame un auto para: ${necesidad}`;
   const prompt = construirPrompt({ pregunta: preguntaFinal, productos: enContexto, presupuesto, categoria, necesidad });
@@ -148,10 +162,10 @@ export default async (req) => {
   }
   if (!resultado.texto) return json(200, { respuesta: 'El asesor no encontró autos para tu consulta.', productosConsultados: enContexto.length });
 
-  // Historial (si falla no rompe la respuesta)
+  // Historial (máximo 800ms para no demorar la entrega de respuesta al usuario)
   let historialGuardado = false;
   const restante = LIMITE_MS - (Date.now() - inicio);
-  if (restante > 600) {
+  if (restante > 1000) {
     try {
       const guardar = (async () => {
         const hoja = await hojaHistorial(doc);
@@ -159,7 +173,7 @@ export default async (req) => {
         await hoja.addRow({ Fecha: fecha, Pregunta: preguntaFinal, Respuesta: resultado.texto.slice(0, 1000) });
         return true;
       })();
-      const tiempo = new Promise((r) => setTimeout(() => r(false), restante - 300));
+      const tiempo = new Promise((r) => setTimeout(() => r(false), Math.min(restante - 300, 800)));
       historialGuardado = await Promise.race([guardar, tiempo]);
     } catch {
       historialGuardado = false;
