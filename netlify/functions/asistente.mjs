@@ -3,30 +3,17 @@
 // 4) Consulta la IA (Google Gemini)  5) Guarda historial  6) Devuelve JSON
 import { abrirHoja, leerAutos, hojaHistorial, json } from '../lib/sheets.mjs';
 
-// Modelos actuales recomendados por la API de Google Gemini en v1beta
+// Modelos actuales de Google Gemini: gemini-3.5-flash primero por ser el más rápido y estable
 const MODELOS = [
-  process.env.GEMINI_MODEL,
-  'gemini-3.8-flash',
-  'gemini-3.5-flash-lite',
   'gemini-3.5-flash',
-  'gemini-3.7-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3.8-flash',
   'gemini-flash-latest',
-].filter(Boolean);
+];
 const LIMITE_MS = 9000; // margen de seguridad antes del límite de 10 s de Netlify
 
 // Caché en memoria: si la función sigue "caliente", no vuelve a leer Google Sheets en 5 minutos
 let cache = { doc: null, autos: null, hora: 0 };
-
-// Respuesta directa y concisa para responder en menos de 2 segundos
-function cuerpo(prompt) {
-  return {
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.2,
-      maxOutputTokens: 300,
-    },
-  };
-}
 
 async function consultarIA(prompt, inicio) {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -43,19 +30,38 @@ async function consultarIA(prompt, inicio) {
       break;
     }
 
-    // Máximo 3.5 segundos por intento de modelo para dar oportunidad a los fallbacks
-    const tiempoParaEsteModelo = Math.min(restante - 500, 3500);
+    // Hasta 5 segundos para que el modelo responda holgadamente
+    const tiempoParaEsteModelo = Math.min(restante - 500, 5000);
     const control = new AbortController();
     const reloj = setTimeout(() => control.abort(), tiempoParaEsteModelo);
 
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent`;
-      const res = await fetch(url, {
+      const payload = {
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 250,
+          thinkingConfig: { thinkingBudget: 0 },
+        },
+      };
+
+      let res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-        body: JSON.stringify(cuerpo(prompt)),
+        body: JSON.stringify(payload),
         signal: control.signal,
       });
+
+      if (res.status === 400) {
+        delete payload.generationConfig.thinkingConfig;
+        res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+          body: JSON.stringify(payload),
+          signal: control.signal,
+        });
+      }
 
       const data = await res.json().catch(() => ({}));
 
