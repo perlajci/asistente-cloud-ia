@@ -4,7 +4,7 @@
 import { abrirHoja, leerAutos, hojaHistorial, json } from '../lib/sheets.mjs';
 
 // Modelos rápidos primero: Netlify corta las funciones a los 10 segundos en el plan gratuito
-const MODELOS = ['gemini-1.5-flash', 'gemini-flash-lite-latest', 'gemini-2.5-flash-lite'];
+const MODELOS = ['gemini-1.5-flash-8b'];
 const LIMITE_MS = 9300; // margen de seguridad antes del límite de 10 s de Netlify
 
 // Caché en memoria: si la función sigue "caliente", no vuelve a leer Google Sheets en 60 s
