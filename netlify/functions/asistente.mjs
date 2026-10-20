@@ -4,7 +4,7 @@
 import { abrirHoja, leerAutos, hojaHistorial, json } from '../lib/sheets.mjs';
 
 // Modelos rápidos primero: Netlify corta las funciones a los 10 segundos en el plan gratuito
-const MODELOS = [process.env.GEMINI_MODEL, 'gemini-flash-lite-latest', 'gemini-flash-latest', 'gemini-2.5-flash-lite'].filter(Boolean);
+const MODELOS = [process.env.GEMINI_MODEL, 'gemini-flash-lite-latest', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-flash-latest'].filter(Boolean);
 const LIMITE_MS = 9300; // margen de seguridad antes del límite de 10 s de Netlify
 
 // Caché en memoria: si la función sigue "caliente", no vuelve a leer Google Sheets en 60 s
@@ -48,7 +48,9 @@ async function consultarIA(prompt, inicio, soloModelo = null, conPensamientoMini
         return { texto: texto.trim(), modelo };
       }
       ultimoError = data?.error?.message || `HTTP ${res.status}`;
-      if (res.status !== 404 && res.status !== 400) break; // solo probamos otro modelo si este no existe o no es compatible
+      // Si el modelo no existe (404), no es compatible (400), está saturado (503/500) o sin cuota (429),
+      // se prueba con el siguiente modelo de la lista
+      if (![400, 404, 429, 500, 503].includes(res.status)) break;
     } catch (e) {
       ultimoError = e.name === 'AbortError' ? 'El servicio de IA tardó demasiado en responder.' : e.message;
       break;
