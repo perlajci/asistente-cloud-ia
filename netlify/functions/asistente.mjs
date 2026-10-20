@@ -5,14 +5,24 @@ import { abrirHoja, leerAutos, hojaHistorial, json } from '../lib/sheets.mjs';
 
 // Modelos rápidos primero: Netlify corta las funciones a los 10 segundos en el plan gratuito
 const MODELOS = [process.env.GEMINI_MODEL, 'gemini-flash-lite-latest', 'gemini-flash-latest', 'gemini-2.5-flash-lite'].filter(Boolean);
-const LIMITE_MS = 9000; // margen de seguridad antes del límite de Netlify
+const LIMITE_MS = 9300; // margen de seguridad antes del límite de 10 s de Netlify
 
-async function consultarIA(prompt, inicio) {
+// Caché en memoria: si la función sigue "caliente", no vuelve a leer Google Sheets en 60 s
+let cache = { doc: null, autos: null, hora: 0 };
+
+// Respuesta directa, sin fase de "razonamiento" larga, para que conteste rápido
+function cuerpo(prompt, conPensamientoMinimo) {
+  const generationConfig = { temperature: 0.3, maxOutputTokens: 700 };
+  if (conPensamientoMinimo) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  return { contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig };
+}
+
+async function consultarIA(prompt, inicio, soloModelo = null, conPensamientoMinimo = true) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('Falta configurar GEMINI_API_KEY en Netlify.');
 
   let ultimoError = '';
-  for (const modelo of MODELOS) {
+  for (const modelo of soloModelo ? [soloModelo] : MODELOS) {
     const restante = LIMITE_MS - (Date.now() - inicio) - 800;
     if (restante < 1500) break;
 
@@ -23,13 +33,16 @@ async function consultarIA(prompt, inicio) {
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.3, maxOutputTokens: 1024 },
-        }),
+        body: JSON.stringify(cuerpo(prompt, conPensamientoMinimo)),
         signal: control.signal,
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 400 && conPensamientoMinimo) {
+        // el modelo no acepta la opción de pensamiento: se reintenta el mismo modelo sin ella
+        conPensamientoMinimo = false;
+        clearTimeout(reloj);
+        return consultarIA(prompt, inicio, modelo, false);
+      }
       if (res.ok) {
         const texto = data?.candidates?.[0]?.content?.parts?.filter((p) => !p.thought).map((p) => p.text || '').join('') || '';
         return { texto: texto.trim(), modelo };
@@ -103,8 +116,13 @@ export default async (req) => {
   // Paso 2: Google Sheets
   let doc, productos;
   try {
-    doc = await abrirHoja();
-    productos = await leerAutos(doc);
+    if (cache.autos && Date.now() - cache.hora < 60000) {
+      ({ doc, autos: productos } = cache);
+    } else {
+      doc = await abrirHoja();
+      productos = await leerAutos(doc);
+      cache = { doc, autos: productos, hora: Date.now() };
+    }
   } catch (e) {
     return json(502, { error: 'No fue posible consultar Google Sheets.', detalle: e.message });
   }

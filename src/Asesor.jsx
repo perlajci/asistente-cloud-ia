@@ -50,7 +50,7 @@ export default function Asesor({ datos, errorDatos, alConsultar }) {
 
     setCargando(true);
     try {
-      const res = await fetch('/.netlify/functions/asistente', {
+      const pedir = () => fetch('/.netlify/functions/asistente', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -60,6 +60,10 @@ export default function Asesor({ datos, errorDatos, alConsultar }) {
           necesidad,
         }),
       });
+
+      // Si la IA tardó demasiado, se reintenta una vez automáticamente (la 2.ª vez suele ser más rápida)
+      let res = await pedir();
+      if (res.status === 502 || res.status === 504) res = await pedir();
 
       let data;
       try {
