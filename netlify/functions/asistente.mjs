@@ -3,12 +3,14 @@
 // 4) Consulta la IA (Google Gemini)  5) Guarda historial  6) Devuelve JSON
 import { abrirHoja, leerAutos, hojaHistorial, json } from '../lib/sheets.mjs';
 
-// Modelos rápidos: Netlify corta las funciones a los 10 segundos en el plan gratuito
+// Modelos rápidos candidatos (sin 1.5-flash-8b que ya fue retirado por Google)
 const MODELOS = [
-  process.env.GEMINI_MODEL,
+  process.env.GEMINI_MODEL && process.env.GEMINI_MODEL !== 'gemini-1.5-flash-8b' ? process.env.GEMINI_MODEL : null,
+  'gemini-2.5-flash',
   'gemini-2.0-flash',
   'gemini-1.5-flash',
-  'gemini-1.5-flash-8b',
+  'gemini-flash-latest',
+  'gemini-2.5-flash-lite',
 ].filter(Boolean);
 const LIMITE_MS = 9000; // margen de seguridad antes del límite de 10 s de Netlify
 
@@ -30,13 +32,16 @@ async function consultarIA(prompt, inicio) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('Falta configurar GEMINI_API_KEY en Netlify.');
 
-  let ultimoError = '';
+  const fallos = [];
 
   for (const modelo of MODELOS) {
     const tiempoTranscurrido = Date.now() - inicio;
     const restante = LIMITE_MS - tiempoTranscurrido;
     // Si queda menos de 1.5 s para el límite de Netlify, detenemos para responder con error controlado
-    if (restante < 1500) break;
+    if (restante < 1500) {
+      fallos.push(`Tiempo agotado antes de probar ${modelo}`);
+      break;
+    }
 
     // Máximo 3.5 segundos por intento de modelo para dar oportunidad a los fallbacks
     const tiempoParaEsteModelo = Math.min(restante - 500, 3500);
@@ -61,18 +66,19 @@ async function consultarIA(prompt, inicio) {
         }
       }
 
-      ultimoError = data?.error?.message || `HTTP ${res.status}`;
-      // Si el modelo está saturado (503/high demand), sin cuota (429) o falló, continúa con el siguiente modelo
-      console.warn(`[asistente] Modelo ${modelo} no disponible (${ultimoError}). Probando alternativa...`);
+      const motivo = data?.error?.message || `HTTP ${res.status}`;
+      fallos.push(`${modelo}: ${motivo}`);
+      console.warn(`[asistente] Modelo ${modelo} falló:`, motivo);
     } catch (e) {
-      ultimoError = e.name === 'AbortError' ? `Tiempo de espera agotado en ${modelo}.` : e.message;
-      console.warn(`[asistente] Error en ${modelo}:`, ultimoError);
+      const motivo = e.name === 'AbortError' ? 'Tiempo de espera agotado' : e.message;
+      fallos.push(`${modelo}: ${motivo}`);
+      console.warn(`[asistente] Error en ${modelo}:`, motivo);
     } finally {
       clearTimeout(reloj);
     }
   }
 
-  throw new Error(ultimoError || 'El servicio de IA no respondió a tiempo.');
+  throw new Error(fallos.length ? fallos.join(' | ') : 'El servicio de IA no respondió a tiempo.');
 }
 
 const pesos = (n) => '$' + Number(n).toLocaleString('es-MX') + ' MXN';
@@ -115,8 +121,24 @@ ${pregunta}`;
 }
 
 export default async (req) => {
-  const inicio = Date.now();
+  if (req.method === 'GET') {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return json(500, { error: 'Falta GEMINI_API_KEY en las variables de Netlify.' });
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+      const data = await res.json();
+      const validos = (data.models || [])
+        .filter((m) => m.supportedGenerationMethods?.includes('generateContent'))
+        .map((m) => m.name.replace('models/', ''));
+      return json(200, { modelosDisponibles: validos, modelosConfigurados: MODELOS });
+    } catch (e) {
+      return json(500, { error: e.message });
+    }
+  }
+
   if (req.method !== 'POST') return json(405, { error: 'Usa el método POST.' });
+
+  const inicio = Date.now();
 
   let body;
   try {
