@@ -4,7 +4,7 @@
 import { abrirHoja, leerAutos, hojaHistorial, json } from '../lib/sheets.mjs';
 
 // Modelos rápidos primero: Netlify corta las funciones a los 10 segundos en el plan gratuito
-const MODELOS = ['gemini-1.5-flash', 'gemini-flash-lite-latest', 'gemini-2.5-flash-lite'];
+const MODELOS = ['gemini-1.5-flash-8b', 'gemini-1.5-flash', 'gemini-flash-lite-latest'];
 const LIMITE_MS = 9300; // margen de seguridad antes del límite de 10 s de Netlify
 
 // Caché en memoria: si la función sigue "caliente", no vuelve a leer Google Sheets en 60 s
@@ -129,10 +129,12 @@ export default async (req) => {
     return json(502, { error: 'No fue posible consultar Google Sheets.', detalle: e.message });
   }
 
-  // Filtro previo opcional por categoría
-  const enContexto = categoria
+  // Filtro previo opcional por categoría y límite de 15 autos para que la IA responda rápido
+  let enContexto = categoria
     ? productos.filter((p) => (p.categoria || '').toLowerCase() === String(categoria).toLowerCase())
     : productos;
+
+  enContexto = enContexto.slice(0, 15);
 
   const preguntaFinal = pregunta || `Recomiéndame un auto para: ${necesidad}`;
   const prompt = construirPrompt({ pregunta: preguntaFinal, productos: enContexto, presupuesto, categoria, necesidad });
